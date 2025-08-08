@@ -3,4 +3,5 @@ rawpy
 opencv-python-headless
 pillow
 piexif
+tifffile
 numpy
