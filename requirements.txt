@@ -1,0 +1,6 @@
+customtkinter
+rawpy
+opencv-python-headless
+pillow
+piexif
+numpy
