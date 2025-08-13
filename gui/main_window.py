@@ -2,10 +2,16 @@ import customtkinter as ctk
 from PIL import ImageTk
 import numpy as np
 
-from utils.file_dialogs import ask_open_dng
+from utils.file_dialogs import (
+    ask_open_dng,
+    ask_save_csv,
+    ask_open_template,
+    ask_save_template,
+)
 from processing.dng_loader import load_dng
 from processing.metadata import get_metadata_string
-from processing.analysis import compute_avg_rgb
+from processing.analysis import compute_region_stats, measure_regions
+from processing.regions import Region, load_template, save_template
 
 
 class DNGViewerApp(ctk.CTk):
@@ -23,6 +29,17 @@ class DNGViewerApp(ctk.CTk):
 
         self.open_btn = ctk.CTkButton(top, text="Open DNG", command=self.on_open)
         self.open_btn.pack(side="left", padx=(5, 10), pady=8)
+
+        self.shape_var = ctk.StringVar(value="rect")
+        self.shape_menu = ctk.CTkOptionMenu(top, variable=self.shape_var, values=["rect", "circle", "polygon"])
+        self.shape_menu.pack(side="left", padx=(0, 10), pady=8)
+
+        self.load_tpl_btn = ctk.CTkButton(top, text="Load Template", command=self.on_load_template)
+        self.load_tpl_btn.pack(side="left", padx=(0, 10), pady=8)
+        self.save_tpl_btn = ctk.CTkButton(top, text="Save Template", command=self.on_save_template)
+        self.save_tpl_btn.pack(side="left", padx=(0, 10), pady=8)
+        self.export_btn = ctk.CTkButton(top, text="Export CSV", command=self.on_export_csv)
+        self.export_btn.pack(side="left", padx=(0, 10), pady=8)
 
         self.meta_label = ctk.CTkLabel(top, text="No file loaded", anchor="w", justify="left")
         self.meta_label.pack(side="left", fill="x", expand=True, padx=5, pady=8)
@@ -51,15 +68,22 @@ class DNGViewerApp(ctk.CTk):
         self._display_origin = (0, 0)
         self._scale = 1.0
         self._full_rgb = None
-        self._rect_id = None
+        self._temp_shape_id = None
         self._drag_start = None
         self._image_size_display = (0, 0)
         self._current_path = None
+
+        self.regions: list[Region] = []
+        self._next_region_id = 1
+        self._drawing_polygon = False
+        self._poly_points: list[tuple[int, int]] = []
+        self._poly_line_ids: list[int] = []
 
         # Bindings
         self.canvas.bind("<ButtonPress-1>", self._on_mouse_down)
         self.canvas.bind("<B1-Motion>", self._on_mouse_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_mouse_up)
+        self.canvas.bind("<Double-Button-1>", self._on_double_click)
         self.bind("<Configure>", lambda e: self._redraw_image())
 
     # ---------- File Ops ----------
@@ -95,6 +119,8 @@ class DNGViewerApp(ctk.CTk):
 
         self._full_rgb = full_rgb
         self._scale = scale
+        self.regions.clear()
+        self._next_region_id = 1
         self._set_display_image(display_pil)
         self.meta_label.configure(text=get_metadata_string(self._current_path))
         self.stats_label.configure(text="Drag to select a region…")
@@ -116,69 +142,190 @@ class DNGViewerApp(ctk.CTk):
         oy = max(0, (ch - ih) // 2)
         self._display_origin = (ox, oy)
         self.canvas.create_image(ox, oy, image=self._tk_img, anchor="nw")
+        self._draw_all_regions()
+
+    def _draw_all_regions(self):
+        if self._full_rgb is None:
+            return
+        ox, oy = self._display_origin
+        for reg in self.regions:
+            if reg.shape == "rect":
+                x = reg.params["x"]; y = reg.params["y"]
+                w = reg.params["w"]; h = reg.params["h"]
+                x0 = int(x * self._scale + ox)
+                y0 = int(y * self._scale + oy)
+                x1 = int((x + w) * self._scale + ox)
+                y1 = int((y + h) * self._scale + oy)
+                self.canvas.create_rectangle(x0, y0, x1, y1, outline="red", width=2)
+                self.canvas.create_text(x0 + 4, y0 + 4, text=str(reg.id), anchor="nw", fill="red")
+            elif reg.shape == "circle":
+                cx = reg.params["cx"]; cy = reg.params["cy"]; r = reg.params["r"]
+                x0 = int((cx - r) * self._scale + ox)
+                y0 = int((cy - r) * self._scale + oy)
+                x1 = int((cx + r) * self._scale + ox)
+                y1 = int((cy + r) * self._scale + oy)
+                self.canvas.create_oval(x0, y0, x1, y1, outline="red", width=2)
+                self.canvas.create_text(x0 + 4, y0 + 4, text=str(reg.id), anchor="nw", fill="red")
+            elif reg.shape == "polygon":
+                pts = []
+                for px, py in reg.params["points"]:
+                    pts.extend([int(px * self._scale + ox), int(py * self._scale + oy)])
+                self.canvas.create_polygon(pts, outline="red", fill="", width=2)
+                if pts:
+                    self.canvas.create_text(pts[0] + 4, pts[1] + 4, text=str(reg.id), anchor="nw", fill="red")
 
     # ---------- ROI Selection ----------
     def _on_mouse_down(self, event):
         if not self._tk_img:
             return
+        mode = self.shape_var.get()
+        if mode == "polygon":
+            if not self._drawing_polygon:
+                self._drawing_polygon = True
+                self._poly_points = [(event.x, event.y)]
+            else:
+                last = self._poly_points[-1]
+                line_id = self.canvas.create_line(last[0], last[1], event.x, event.y, fill="red", width=2)
+                self._poly_line_ids.append(line_id)
+                self._poly_points.append((event.x, event.y))
+            return
         self._drag_start = (event.x, event.y)
-        if self._rect_id:
-            self.canvas.delete(self._rect_id)
-            self._rect_id = None
+        if self._temp_shape_id:
+            self.canvas.delete(self._temp_shape_id)
+            self._temp_shape_id = None
 
     def _on_mouse_drag(self, event):
-        if not self._drag_start:
+        if not self._drag_start or self.shape_var.get() == "polygon":
             return
         x0, y0 = self._drag_start
         x1, y1 = event.x, event.y
-        if self._rect_id:
-            self.canvas.coords(self._rect_id, x0, y0, x1, y1)
-        else:
-            self._rect_id = self.canvas.create_rectangle(x0, y0, x1, y1, outline="red", width=2)
+        mode = self.shape_var.get()
+        if mode == "rect":
+            if self._temp_shape_id:
+                self.canvas.coords(self._temp_shape_id, x0, y0, x1, y1)
+            else:
+                self._temp_shape_id = self.canvas.create_rectangle(x0, y0, x1, y1, outline="red", width=2)
+        elif mode == "circle":
+            r = ((x1 - x0) ** 2 + (y1 - y0) ** 2) ** 0.5
+            if self._temp_shape_id:
+                self.canvas.coords(self._temp_shape_id, x0 - r, y0 - r, x0 + r, y0 + r)
+            else:
+                self._temp_shape_id = self.canvas.create_oval(x0 - r, y0 - r, x0 + r, y0 + r, outline="red", width=2)
 
     def _on_mouse_up(self, event):
+        if self.shape_var.get() == "polygon":
+            return
         if not self._drag_start or self._full_rgb is None:
             return
         sx, sy = self._drag_start
         ex, ey = event.x, event.y
         self._drag_start = None
 
-        x0, x1 = sorted([sx, ex])
-        y0, y1 = sorted([sy, ey])
-
         ox, oy = self._display_origin
-        x0 -= ox; x1 -= ox
-        y0 -= oy; y1 -= oy
-
-        iw, ih = self._image_size_display
-        x0 = max(0, min(iw, x0)); x1 = max(0, min(iw, x1))
-        y0 = max(0, min(ih, y0)); y1 = max(0, min(ih, y1))
-        if (x1 - x0) < 2 or (y1 - y0) < 2:
-            self.stats_label.configure(text="Selection too small.")
+    
+        mode = self.shape_var.get()
+        if mode == "rect":
+            x0, x1 = sorted([sx, ex])
+            y0, y1 = sorted([sy, ey])
+            x0 -= ox; x1 -= ox; y0 -= oy; y1 -= oy
+            iw, ih = self._image_size_display
+            x0 = max(0, min(iw, x0)); x1 = max(0, min(iw, x1))
+            y0 = max(0, min(ih, y0)); y1 = max(0, min(ih, y1))
+            if (x1 - x0) < 2 or (y1 - y0) < 2:
+                self.stats_label.configure(text="Selection too small.")
+                return
+            fx0 = int(np.floor(x0 / self._scale))
+            fy0 = int(np.floor(y0 / self._scale))
+            fx1 = int(np.ceil(x1 / self._scale))
+            fy1 = int(np.ceil(y1 / self._scale))
+            w = fx1 - fx0; h = fy1 - fy0
+            params = {"x": fx0, "y": fy0, "w": w, "h": h}
+        elif mode == "circle":
+            dx = ex - sx
+            dy = ey - sy
+            r_disp = (dx ** 2 + dy ** 2) ** 0.5
+            cx = (sx - ox) / self._scale
+            cy = (sy - oy) / self._scale
+            r = r_disp / self._scale
+            params = {"cx": int(round(cx)), "cy": int(round(cy)), "r": int(round(r))}
+        else:
             return
+        
+        region = Region(id=self._next_region_id, shape=mode, params=params)
+        self.regions.append(region)
+        self._next_region_id += 1
+        self._temp_shape_id = None
+        self._redraw_image()
+        stats = compute_region_stats(self._full_rgb, region)
+        if stats:
+            self.stats_label.configure(
+                text=f"Region {region.id} mean (R,G,B) = ({stats['Mean R']:.2f}, {stats['Mean G']:.2f}, {stats['Mean B']:.2f})"
+            )
 
-        fx0 = int(np.floor(x0 / self._scale))
-        fy0 = int(np.floor(y0 / self._scale))
-        fx1 = int(np.ceil(x1 / self._scale))
-        fy1 = int(np.ceil(y1 / self._scale))
-
-        h, w, _ = self._full_rgb.shape
-        fx0 = max(0, min(w, fx0)); fx1 = max(0, min(w, fx1))
-        fy0 = max(0, min(h, fy0)); fy1 = max(0, min(h, fy1))
-        if fx1 - fx0 < 2 or fy1 - fy0 < 2:
-            self.stats_label.configure(text="Selection too small after scaling.")
+    def _on_double_click(self, event):
+        if self.shape_var.get() != "polygon" or not self._drawing_polygon:
             return
-
-        avg = compute_avg_rgb(self._full_rgb, fx0, fy0, fx1, fy1)
-        if avg is None:
-            self.stats_label.configure(text="No pixels in selection.")
+        if len(self._poly_points) < 3:
             return
+        # Close polygon
+        first = self._poly_points[0]
+        last = self._poly_points[-1]
+        line_id = self.canvas.create_line(last[0], last[1], first[0], first[1], fill="red", width=2)
+        self._poly_line_ids.append(line_id)
+        pts_display = self._poly_points[:]
+        self._drawing_polygon = False
+        self._poly_points = []
+        for lid in self._poly_line_ids:
+            self.canvas.delete(lid)
+        self._poly_line_ids = []
+        # Convert to full-resolution coordinates
+        ox, oy = self._display_origin
+        points_full = []
+        for x, y in pts_display:
+            fx = int(round((x - ox) / self._scale))
+            fy = int(round((y - oy) / self._scale))
+            points_full.append([fx, fy])
+        region = Region(id=self._next_region_id, shape="polygon", params={"points": points_full})
+        self.regions.append(region)
+        self._next_region_id += 1
+        self._redraw_image()
+        stats = compute_region_stats(self._full_rgb, region)
+        if stats:
+            self.stats_label.configure(
+                text=f"Region {region.id} mean (R,G,B) = ({stats['Mean R']:.2f}, {stats['Mean G']:.2f}, {stats['Mean B']:.2f})"
+            )
 
-        r, g, b = avg
-        bitdepth = 8 if self._full_rgb.dtype == np.uint8 else 16
-        self.stats_label.configure(
-            text=f"ROI avg (R,G,B) = ({r:.2f}, {g:.2f}, {b:.2f})  [{bitdepth}-bit]"
-        )
+    # ---------- Template & Export ----------
+    def on_load_template(self):
+        path = ask_open_template(self)
+        if not path:
+            return
+        try:
+            regs = load_template(path)
+        except Exception as e:
+            self.stats_label.configure(text=f"Failed to load template: {e}")
+            return
+        for r in regs:
+            r.id = self._next_region_id
+            self._next_region_id += 1
+            self.regions.append(r)
+        self._redraw_image()
+
+    def on_save_template(self):
+        path = ask_save_template(self)
+        if not path:
+            return
+        save_template(path, self.regions)
+
+    def on_export_csv(self):
+        if not self.regions or self._full_rgb is None:
+            return
+        path = ask_save_csv(self)
+        if not path:
+            return
+        df = measure_regions(self._full_rgb, self.regions)
+        df.to_csv(path, index=False)
+        self.stats_label.configure(text=f"Saved {len(df)} regions to {path}")
 
 
 class OptionsPanel(ctk.CTkFrame):

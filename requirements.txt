@@ -5,3 +5,4 @@ pillow
 piexif
 tifffile
 numpy
+pandas
