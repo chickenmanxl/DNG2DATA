@@ -38,14 +38,19 @@
 - **`utils/`** — File dialog helpers.
 - Designed for easy expansion (e.g., more stats, batch mode, Bayer analysis).
 
+### **6. Time-Series Data Collection**
+- Batch process a folder of DNG images with uniform settings.
+- Apply predefined regions to each frame.
+- Export measurements to Excel with timestamps from each image.
+- Use the "Process Folder" button in the GUI to run the batch.
+
 ---
 
 ## Planned Features
 - Toggle between 8-bit and 16-bit output in the UI (partially implemented)
-- ROI stats: min, max, standard deviation, CV, pixel count, ect.
+- ROI pixel count
 - Histogram display
 - Multiple ROI selection with plate map and CSV data export
-- Kenetic data collection from image time-seies
 - Zoom and pan support
 - Raw Bayer plane analysis
 - Fallback to `exiftool` for metadata (partially implemented)

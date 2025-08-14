@@ -31,3 +31,17 @@ def ask_save_template(parent=None):
         defaultextension=".json",
         filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
     )
+
+def ask_open_folder(parent=None):
+    """Ask the user to select a folder."""
+    return fd.askdirectory(parent=parent, title="Select Folder")
+
+
+def ask_save_excel(parent=None):
+    """Ask for a destination Excel file path."""
+    return fd.asksaveasfilename(
+        parent=parent,
+        title="Save Excel",
+        defaultextension=".xlsx",
+        filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")],
+    )

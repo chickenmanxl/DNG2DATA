@@ -6,3 +6,4 @@ piexif
 tifffile
 numpy
 pandas
+openppyxl

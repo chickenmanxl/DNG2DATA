@@ -7,11 +7,14 @@ from utils.file_dialogs import (
     ask_save_csv,
     ask_open_template,
     ask_save_template,
+    ask_open_folder,
+    ask_save_excel,
 )
 from processing.dng_loader import load_dng
 from processing.metadata import get_metadata_string
 from processing.analysis import compute_region_stats, measure_regions
 from processing.regions import Region, load_template, save_template
+from processing.time_series import collect_time_series
 
 
 class DNGViewerApp(ctk.CTk):
@@ -40,6 +43,8 @@ class DNGViewerApp(ctk.CTk):
         self.save_tpl_btn.pack(side="left", padx=(0, 10), pady=8)
         self.export_btn = ctk.CTkButton(top, text="Export CSV", command=self.on_export_csv)
         self.export_btn.pack(side="left", padx=(0, 10), pady=8)
+        self.series_btn = ctk.CTkButton(top, text="Process Folder", command=self.on_process_folder)
+        self.series_btn.pack(side="left", padx=(0, 10), pady=8)
 
         self.meta_label = ctk.CTkLabel(top, text="No file loaded", anchor="w", justify="left")
         self.meta_label.pack(side="left", fill="x", expand=True, padx=5, pady=8)
@@ -95,23 +100,30 @@ class DNGViewerApp(ctk.CTk):
         self._load_and_show()
 
     def apply_settings(self):
-        """Reprocess current image with new settings (if any image is loaded)."""
+        # Reprocess current image with new settings (if any image is loaded).
         if not self._current_path:
             return
         self._load_and_show()
 
+    def _get_load_settings(self) -> dict:
+        # Collect current loader settings from the options panel.
+        return {
+            "output_bits": 16 if self.opts.bitdepth_var.get() == "16-bit" else 8,
+            "wb_mode": self.opts.wb_mode_var.get(),
+            "user_wb_rgb": self.opts.get_manual_wb(),
+            "gamma_mode": self.opts.gamma_mode_var.get(),
+            "gamma_tuple": self.opts.get_gamma_tuple(),
+            "auto_bright": bool(self.opts.auto_bright_var.get()),
+            "demosaic_algo": self.opts.demosaic_var.get(),
+        }
+
     def _load_and_show(self):
+        print(self._get_load_settings())
         try:
             full_rgb, display_pil, scale = load_dng(
                 self._current_path,
                 max_w=1600, max_h=1000,
-                output_bits=16 if self.opts.bitdepth_var.get() == "16-bit" else 8,
-                wb_mode=self.opts.wb_mode_var.get(),
-                user_wb_rgb=self.opts.get_manual_wb(),
-                gamma_mode=self.opts.gamma_mode_var.get(),
-                gamma_tuple=self.opts.get_gamma_tuple(),
-                auto_bright=bool(self.opts.auto_bright_var.get()),
-                demosaic_algo=self.opts.demosaic_var.get(),
+                **self._get_load_settings(),
             )
         except Exception as e:
             self.meta_label.configure(text=f"Failed to load: {e}")
@@ -327,6 +339,28 @@ class DNGViewerApp(ctk.CTk):
         df.to_csv(path, index=False)
         self.stats_label.configure(text=f"Saved {len(df)} regions to {path}")
 
+    def on_process_folder(self):
+        """Batch-process a folder of DNG images using current regions."""
+        if not self.regions:
+            self.stats_label.configure(text="Define regions or load a template first")
+            return
+        folder = ask_open_folder(self)
+        if not folder:
+            return
+        excel_path = ask_save_excel(self)
+        if not excel_path:
+            return
+        try:
+            collect_time_series(
+                folder,
+                self.regions,
+                excel_path,
+                load_settings=self._get_load_settings(),
+            )
+            self.stats_label.configure(text=f"Saved Excel to {excel_path}")
+        except Exception as e:
+            self.stats_label.configure(text=f"Failed: {e}")
+
 
 class OptionsPanel(ctk.CTkFrame):
     def __init__(self, parent, apply_callback):
@@ -348,13 +382,14 @@ class OptionsPanel(ctk.CTkFrame):
         ctk.CTkOptionMenu(self, variable=self.wb_mode_var, values=["Camera", "Auto", "Manual"]).pack(fill="x", padx=10)
         wb_row = ctk.CTkFrame(self)
         wb_row.pack(fill="x", padx=10, pady=(6, 10))
-        ctk.CTkLabel(wb_row, text="Manual WB (R,G,B)").pack(side="left")
+        ctk.CTkLabel(wb_row, text="Manual WB (R,G1,B, G2)").pack(side="left")
         self.wb_r = ctk.CTkEntry(wb_row, width=60, placeholder_text="R")
-        self.wb_g = ctk.CTkEntry(wb_row, width=60, placeholder_text="G")
+        self.wb_g1 = ctk.CTkEntry(wb_row, width=60, placeholder_text="G1")
         self.wb_b = ctk.CTkEntry(wb_row, width=60, placeholder_text="B")
-        self.wb_r.pack(side="left", padx=(6, 4)); self.wb_g.pack(side="left", padx=4); self.wb_b.pack(side="left", padx=4)
+        self.wb_g2 = ctk.CTkEntry(wb_row, width=60, placeholder_text="G2")
+        self.wb_r.pack(side="left", padx=(6, 4)); self.wb_g1.pack(side="left", padx=4); self.wb_b.pack(side="left", padx=4); self.wb_g2.pack(side="left", padx=4)
         # sensible defaults (neutral)
-        self.wb_r.insert(0, "1.0"); self.wb_g.insert(0, "1.0"); self.wb_b.insert(0, "1.0")
+        self.wb_r.insert(0, "1.0"); self.wb_g1.insert(0, "0.5"); self.wb_b.insert(0, "1.0"); self.wb_g2.insert(0, "0.5")
 
         # --- Gamma ---
         self.gamma_mode_var = ctk.StringVar(value="Linear")
@@ -384,13 +419,14 @@ class OptionsPanel(ctk.CTkFrame):
         ctk.CTkLabel(self, text="").pack(pady=4)
 
     def get_manual_wb(self):
-        try:
+        #try:
             r = float(self.wb_r.get())
-            g = float(self.wb_g.get())
+            g1 = float(self.wb_g1.get())
             b = float(self.wb_b.get())
-            return (r, g, b)
-        except Exception:
-            return (1.0, 1.0, 1.0)
+            g2 = float(self.wb_g2.get())
+            return (r, g1, b, g2)
+        #except Exception:
+            #return (1.0, 0.5, 1.0, 0.5)
 
     def get_gamma_tuple(self):
         if self.gamma_mode_var.get() != "Manual":

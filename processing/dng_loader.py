@@ -26,12 +26,13 @@ def _resolve_wb_kwargs(wb_mode: str, user_wb_rgb):
     if wb_mode == "auto":
         return dict(use_camera_wb=False, use_auto_wb=True)
     if wb_mode == "manual":
-        if not user_wb_rgb or len(user_wb_rgb) < 3:
+        #if not user_wb_rgb or len(user_wb_rgb) < 4:
             # fallback to neutral gains if not provided
-            user_wb_rgb = (1.0, 1.0, 1.0)
-        r, g, b = map(float, user_wb_rgb[:3])
-        # rawpy expects 4-tuple (R, G1, B, G2). Use same G for both.
-        return dict(use_camera_wb=False, use_auto_wb=False, user_wb=(r, g, b, g))
+            #user_wb_rgb = (1.0, 0.5, 1, 0.5)
+        print(user_wb_rgb)
+        r, g1, b, g2 = map(float, user_wb_rgb[:4])
+        # rawpy expects 4-tuple (R, G1, B, G2)
+        return dict(use_camera_wb=False, use_auto_wb=False, user_wb=(r, g1, b, g2))
     # default
     return dict(use_camera_wb=True, use_auto_wb=False)
 
@@ -57,15 +58,16 @@ def _resolve_gamma(gamma_mode: str, gamma_tuple):
 
 def load_dng(
     path,
+    user_wb_rgb,  # used when wb_mode == "Manual"
     max_w=1600,
     max_h=1000,
     output_bits=8,                # 8 or 16
     wb_mode="Camera",             # "Camera" | "Auto" | "Manual"
-    user_wb_rgb=(1.0, 1.0, 1.0),  # used when wb_mode == "Manual"
     gamma_mode="Linear",          # "Linear" | "sRGB-ish" | "Manual"
     gamma_tuple=(1.0, 1.0),       # power, slope (Manual)
     auto_bright=False,            # False preserves linearity
     demosaic_algo="AHD (default)" # per _DEMOSAIC_MAP keys
+    
 ):
     """
     Returns:
@@ -79,6 +81,8 @@ def load_dng(
     demosaic = _DEMOSAIC_MAP.get(demosaic_algo, rawpy.DemosaicAlgorithm.AHD)
     wb_kwargs = _resolve_wb_kwargs(wb_mode, user_wb_rgb)
     gamma = _resolve_gamma(gamma_mode, gamma_tuple)
+
+    print(wb_kwargs)
 
     with rawpy.imread(path) as raw:
         rgb = raw.postprocess(
