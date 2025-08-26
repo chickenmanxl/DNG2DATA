@@ -10,9 +10,14 @@ from utils.file_dialogs import (
     ask_open_folder,
     ask_save_excel,
 )
+from processing.analysis import (
+    compute_region_stats,
+    measure_regions,
+    extract_raw_region,
+    average_raw_region,
+)
 from processing.dng_loader import load_dng
 from processing.metadata import get_metadata_string
-from processing.analysis import compute_region_stats, measure_regions, extract_raw_region
 from processing.regions import Region, load_template, save_template
 from processing.time_series import collect_time_series
 
@@ -371,30 +376,41 @@ class DNGViewerApp(ctk.CTk):
             self.stats_label.configure(text=f"Failed: {e}")
 
     def on_view_raw(self):
-            """Display raw Bayer data for the most recently defined region."""
-            if self._raw_bayer is None or self._last_region is None:
-                self.stats_label.configure(text="No region selected")
-                return
-            data, mask = extract_raw_region(self._raw_bayer, self._last_region)
-            if data.size == 0:
-                self.stats_label.configure(text="Region is empty")
-                return
-            top = ctk.CTkToplevel(self)
-            top.title(f"Raw Region {self._last_region.id}")
-            box = ctk.CTkTextbox(top, width=400, height=400, font=("Courier", 12))
-            box.pack(fill="both", expand=True)
-            lines = []
-            if mask is None:
-                for row in data:
-                    lines.append(" ".join(str(int(v)) for v in row))
-            else:
-                for row, mrow in zip(data, mask):
-                    vals = []
-                    for val, m in zip(row, mrow):
-                        vals.append(str(int(val)) if m else ".")
-                    lines.append(" ".join(vals))
-            box.insert("1.0", "\n".join(lines))
-            box.configure(state="disabled")
+        """Display raw Bayer data for the most recently defined region."""
+        if self._raw_bayer is None or self._last_region is None:
+            self.stats_label.configure(text="No region selected")
+            return
+
+        data, mask = extract_raw_region(self._raw_bayer, self._last_region)
+        if data.size == 0:
+            self.stats_label.configure(text="Region is empty")
+            return
+
+        means = average_raw_region(self._raw_bayer, self._last_region)
+
+        top = ctk.CTkToplevel(self)
+        top.title(f"Raw Region {self._last_region.id}")
+
+        mean_text = (
+            f"R: {means['R']:.2f}  G1: {means['G1']:.2f}  "
+            f"G2: {means['G2']:.2f}  B: {means['B']:.2f}"
+        )
+        ctk.CTkLabel(top, text=mean_text).pack(fill="x", padx=10, pady=5)
+
+        box = ctk.CTkTextbox(top, width=400, height=400, font=("Courier", 12))
+        box.pack(fill="both", expand=True)
+        lines = []
+        if mask is None:
+            for row in data:
+                lines.append(" ".join(str(int(v)) for v in row))
+        else:
+            for row, mrow in zip(data, mask):
+                vals = []
+                for val, m in zip(row, mrow):
+                    vals.append(str(int(val)) if m else ".")
+                lines.append(" ".join(vals))
+        box.insert("1.0", "\n".join(lines))
+        box.configure(state="disabled")
 
 class OptionsPanel(ctk.CTkFrame):
     def __init__(self, parent, apply_callback):

@@ -101,7 +101,54 @@ def extract_raw_region(img: np.ndarray, region: Region):
         return sub, mask
     else:
         raise ValueError(f"Unsupported shape: {region.shape}")
+ 
     
+def average_raw_region(img: np.ndarray, region: Region):
+    """Compute mean raw values for a region split into Bayer planes.
+
+    The raw image is assumed to follow an ``RGGB`` Bayer pattern.  The
+    function extracts the region using :func:`extract_raw_region`, slices
+    it into R/G1/G2/B planes, applies the mask if provided and returns the
+    average value of each plane as a dictionary with keys ``"R"``,
+    ``"G1"``, ``"G2"`` and ``"B"``.  ``None`` is returned if the region
+    is empty.
+    """
+
+    data, mask = extract_raw_region(img, region)
+    if data.size == 0:
+        return None
+
+    # Slice into Bayer planes (RGGB)
+    r = data[0::2, 0::2]
+    g1 = data[0::2, 1::2]
+    g2 = data[1::2, 0::2]
+    b = data[1::2, 1::2]
+
+    if mask is not None:
+        r_m = mask[0::2, 0::2]
+        g1_m = mask[0::2, 1::2]
+        g2_m = mask[1::2, 0::2]
+        b_m = mask[1::2, 1::2]
+
+        def masked_mean(values, m):
+            vals = values[m]
+            if vals.size == 0:
+                return float("nan")
+            return float(np.mean(vals))
+
+        r_mean = masked_mean(r, r_m)
+        g1_mean = masked_mean(g1, g1_m)
+        g2_mean = masked_mean(g2, g2_m)
+        b_mean = masked_mean(b, b_m)
+    else:
+        r_mean = float(np.mean(r)) if r.size else float("nan")
+        g1_mean = float(np.mean(g1)) if g1.size else float("nan")
+        g2_mean = float(np.mean(g2)) if g2.size else float("nan")
+        b_mean = float(np.mean(b)) if b.size else float("nan")
+
+    return {"R": r_mean, "G1": g1_mean, "G2": g2_mean, "B": b_mean}
+
+
 def measure_regions(img: np.ndarray, regions: List[Region]) -> pd.DataFrame:
     """Measure multiple regions and return a DataFrame."""
     rows = []
