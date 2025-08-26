@@ -72,6 +72,7 @@ def load_dng(
     """
     Returns:
         full_rgb    : numpy array (H, W, 3), dtype uint8 or uint16
+        raw_bayer   : numpy array (H, W), raw sensor values
         display_pil : PIL Image (scaled preview, RGB 8-bit)
         scale       : float (display_px = full_px * scale)
     """
@@ -92,6 +93,7 @@ def load_dng(
             gamma=gamma,
             **wb_kwargs
         )
+        raw_bayer = raw.raw_image_visible.copy()
 
     full_rgb = np.asarray(rgb)  # HxWx3
 
@@ -111,4 +113,4 @@ def load_dng(
     pil_full = Image.fromarray(preview, mode="RGB")
     display_pil = pil_full.resize((disp_w, disp_h), resample=Image.LANCZOS) if scale < 1.0 else pil_full
 
-    return full_rgb, display_pil.convert("RGB"), scale
+    return full_rgb, raw_bayer, display_pil.convert("RGB"), scale

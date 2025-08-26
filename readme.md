@@ -23,6 +23,7 @@
 - Computes average R, G, B values for the ROI.
 - Uses full-resolution pixel data for analysis (default 8-bit, 16-bit ready).
 - Displays bit depth in the results.
+- View raw Bayer data for a selected region in a pop-up window.
 
 ### **4. Metadata Extraction**
 - Reads basic EXIF tags from the DNG:
@@ -52,7 +53,6 @@
 - Histogram display
 - Multiple ROI selection with plate map and CSV data export
 - Zoom and pan support
-- Raw Bayer plane analysis
 - Fallback to `exiftool` for metadata (partially implemented)
 - Drag-and-drop file loading
 - Persistent settings (white balance mode, gamma, etc.) (partially implemented)

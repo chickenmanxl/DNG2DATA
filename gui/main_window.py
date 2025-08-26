@@ -12,7 +12,7 @@ from utils.file_dialogs import (
 )
 from processing.dng_loader import load_dng
 from processing.metadata import get_metadata_string
-from processing.analysis import compute_region_stats, measure_regions
+from processing.analysis import compute_region_stats, measure_regions, extract_raw_region
 from processing.regions import Region, load_template, save_template
 from processing.time_series import collect_time_series
 
@@ -45,6 +45,8 @@ class DNGViewerApp(ctk.CTk):
         self.export_btn.pack(side="left", padx=(0, 10), pady=8)
         self.series_btn = ctk.CTkButton(top, text="Process Folder", command=self.on_process_folder)
         self.series_btn.pack(side="left", padx=(0, 10), pady=8)
+        self.raw_btn = ctk.CTkButton(top, text="View Raw", command=self.on_view_raw)
+        self.raw_btn.pack(side="left", padx=(0, 10), pady=8)
 
         self.meta_label = ctk.CTkLabel(top, text="No file loaded", anchor="w", justify="left")
         self.meta_label.pack(side="left", fill="x", expand=True, padx=5, pady=8)
@@ -73,6 +75,7 @@ class DNGViewerApp(ctk.CTk):
         self._display_origin = (0, 0)
         self._scale = 1.0
         self._full_rgb = None
+        self._raw_bayer = None
         self._temp_shape_id = None
         self._drag_start = None
         self._image_size_display = (0, 0)
@@ -83,6 +86,7 @@ class DNGViewerApp(ctk.CTk):
         self._drawing_polygon = False
         self._poly_points: list[tuple[int, int]] = []
         self._poly_line_ids: list[int] = []
+        self._last_region: Region | None = None
 
         # Bindings
         self.canvas.bind("<ButtonPress-1>", self._on_mouse_down)
@@ -120,7 +124,7 @@ class DNGViewerApp(ctk.CTk):
     def _load_and_show(self):
         print(self._get_load_settings())
         try:
-            full_rgb, display_pil, scale = load_dng(
+            full_rgb, raw_bayer, display_pil, scale = load_dng(
                 self._current_path,
                 max_w=1600, max_h=1000,
                 **self._get_load_settings(),
@@ -130,9 +134,11 @@ class DNGViewerApp(ctk.CTk):
             return
 
         self._full_rgb = full_rgb
+        self._raw_bayer = raw_bayer
         self._scale = scale
         self.regions.clear()
         self._next_region_id = 1
+        self._last_region = None
         self._set_display_image(display_pil)
         self.meta_label.configure(text=get_metadata_string(self._current_path))
         self.stats_label.configure(text="Drag to select a region…")
@@ -268,6 +274,7 @@ class DNGViewerApp(ctk.CTk):
         self._next_region_id += 1
         self._temp_shape_id = None
         self._redraw_image()
+        self._last_region = region
         stats = compute_region_stats(self._full_rgb, region)
         if stats:
             self.stats_label.configure(
@@ -301,6 +308,7 @@ class DNGViewerApp(ctk.CTk):
         self.regions.append(region)
         self._next_region_id += 1
         self._redraw_image()
+        self._last_region = region
         stats = compute_region_stats(self._full_rgb, region)
         if stats:
             self.stats_label.configure(
@@ -321,6 +329,7 @@ class DNGViewerApp(ctk.CTk):
             r.id = self._next_region_id
             self._next_region_id += 1
             self.regions.append(r)
+        self._last_region = self.regions[-1] if self.regions else None
         self._redraw_image()
 
     def on_save_template(self):
@@ -361,6 +370,31 @@ class DNGViewerApp(ctk.CTk):
         except Exception as e:
             self.stats_label.configure(text=f"Failed: {e}")
 
+    def on_view_raw(self):
+            """Display raw Bayer data for the most recently defined region."""
+            if self._raw_bayer is None or self._last_region is None:
+                self.stats_label.configure(text="No region selected")
+                return
+            data, mask = extract_raw_region(self._raw_bayer, self._last_region)
+            if data.size == 0:
+                self.stats_label.configure(text="Region is empty")
+                return
+            top = ctk.CTkToplevel(self)
+            top.title(f"Raw Region {self._last_region.id}")
+            box = ctk.CTkTextbox(top, width=400, height=400, font=("Courier", 12))
+            box.pack(fill="both", expand=True)
+            lines = []
+            if mask is None:
+                for row in data:
+                    lines.append(" ".join(str(int(v)) for v in row))
+            else:
+                for row, mrow in zip(data, mask):
+                    vals = []
+                    for val, m in zip(row, mrow):
+                        vals.append(str(int(val)) if m else ".")
+                    lines.append(" ".join(vals))
+            box.insert("1.0", "\n".join(lines))
+            box.configure(state="disabled")
 
 class OptionsPanel(ctk.CTkFrame):
     def __init__(self, parent, apply_callback):

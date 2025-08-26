@@ -83,7 +83,7 @@ def collect_time_series(
 
     frames: List[pd.DataFrame] = []
     for p in paths:
-        full_rgb, _, _ = load_dng(p, **load_settings)
+        full_rgb, _, _, _ = load_dng(p, **load_settings)
         df = measure_regions(full_rgb, regions)
         ts = _get_image_timestamp(p)
         df.insert(0, "Timestamp", ts)
